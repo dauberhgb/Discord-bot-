@@ -1,0 +1,402 @@
+<!DOCTYPE html>
+<html lang="{{ current_lang if current_lang else 'ar' }}" dir="{{ 'ltr' if current_lang == 'en' else 'rtl' }}">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{% if current_lang == 'en' %}Select Server | Dashboard{% else %}اختر السيرفر | لوحة التحكم{% endif %}</title>
+    <!-- Google Fonts: Cairo -->
+    <link href="https://fonts.googleapis.com/css2?family=Cairo:wght@400;600;700;800;900&display=swap" rel="stylesheet">
+    {% if current_lang == 'en' %}
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    {% else %}
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.rtl.min.css" rel="stylesheet">
+    {% endif %}
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" rel="stylesheet">
+    
+    <style>
+        :root {
+            --bg-primary: #08090c;
+            --bg-glass: rgba(18, 20, 29, 0.55);
+            --bg-card: rgba(25, 28, 41, 0.45);
+            --bg-card-hover: rgba(35, 39, 58, 0.65);
+            
+            --accent-purple: #8b5cf6;
+            --accent-cyan: #06b6d4;
+            --accent-pink: #ec4899;
+            --accent-gradient: linear-gradient(135deg, #6366f1 0%, #a855f7 50%, #ec4899 100%);
+            --accent-glow: rgba(168, 85, 247, 0.45);
+            
+            --text-white: #ffffff;
+            --text-normal: #e2e8f0;
+            --text-muted: #94a3b8;
+            
+            --border-glass: rgba(255, 255, 255, 0.08);
+            --border-hover: rgba(168, 85, 247, 0.5);
+        }
+
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+            font-family: 'Cairo', sans-serif;
+        }
+
+        body {
+            background-color: var(--bg-primary);
+            color: var(--text-normal);
+            min-height: 100vh;
+            position: relative;
+            overflow-x: hidden;
+        }
+
+        /* خلفية نيون حية ومتحركة */
+        .ambient-bg {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100vw;
+            height: 100vh;
+            z-index: -1;
+            overflow: hidden;
+            pointer-events: none;
+        }
+
+        .orb {
+            position: absolute;
+            border-radius: 50%;
+            filter: blur(100px);
+            opacity: 0.35;
+            animation: floatOrb 20s infinite alternate ease-in-out;
+        }
+
+        .orb-1 {
+            width: 450px;
+            height: 450px;
+            background: #6366f1;
+            top: -100px;
+            right: -50px;
+        }
+
+        .orb-2 {
+            width: 500px;
+            height: 500px;
+            background: #a855f7;
+            bottom: -150px;
+            left: -100px;
+            animation-delay: -5s;
+        }
+
+        @keyframes floatOrb {
+            0% { transform: translate(0, 0) scale(1); }
+            50% { transform: translate(60px, 80px) scale(1.15); }
+            100% { transform: translate(-40px, 40px) scale(0.9); }
+        }
+
+        /* Hero Section الزجاجي */
+        .hero-section {
+            background: var(--bg-glass);
+            backdrop-filter: blur(25px);
+            -webkit-backdrop-filter: blur(25px);
+            padding: 40px 20px;
+            border-radius: 28px;
+            margin-bottom: 35px;
+            text-align: center;
+            border: 1px solid var(--border-glass);
+            box-shadow: 0 20px 50px rgba(0, 0, 0, 0.4), inset 0 1px 0 rgba(255, 255, 255, 0.1);
+            position: relative;
+            overflow: hidden;
+        }
+
+        .hero-section::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            height: 3px;
+            background: var(--accent-gradient);
+        }
+
+        .hero-section h1 {
+            font-size: 2.2rem;
+            color: var(--text-white);
+            text-shadow: 0 0 15px rgba(255, 255, 255, 0.2);
+            letter-spacing: 0.5px;
+        }
+
+        .verified-badge {
+            background: rgba(34, 197, 94, 0.12);
+            color: #4ade80;
+            padding: 8px 22px;
+            border-radius: 50px;
+            display: inline-flex;
+            align-items: center;
+            gap: 10px;
+            font-weight: 800;
+            border: 1px solid rgba(34, 197, 94, 0.3);
+            box-shadow: 0 0 20px rgba(34, 197, 94, 0.15);
+            font-size: 0.95rem;
+        }
+
+        /* Server Cards الزجاجية التفاعلية */
+        .server-card {
+            background: var(--bg-card);
+            backdrop-filter: blur(20px);
+            -webkit-backdrop-filter: blur(20px);
+            border: 1px solid var(--border-glass);
+            border-radius: 20px;
+            padding: 22px 28px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            margin-bottom: 18px;
+            transition: all 0.35s cubic-bezier(0.4, 0, 0.2, 1);
+            position: relative;
+            overflow: hidden;
+            box-shadow: 0 10px 30px rgba(0, 0, 0, 0.3);
+        }
+
+        .server-card:hover {
+            background: var(--bg-card-hover);
+            border-color: var(--border-hover);
+            transform: translateY(-4px);
+            box-shadow: 0 15px 35px rgba(0, 0, 0, 0.5), 0 0 25px var(--accent-glow);
+        }
+
+        .server-info {
+            display: flex;
+            align-items: center;
+            gap: 18px;
+        }
+
+        .server-icon {
+            width: 58px;
+            height: 58px;
+            border-radius: 18px;
+            background: var(--accent-gradient);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 22px;
+            font-weight: 900;
+            color: #ffffff;
+            object-fit: cover;
+            border: 2px solid rgba(255, 255, 255, 0.1);
+            box-shadow: 0 0 15px var(--accent-glow);
+            transition: transform 0.3s ease;
+        }
+
+        .server-card:hover .server-icon {
+            transform: scale(1.08) rotate(3deg);
+            border-color: rgba(168, 85, 247, 0.6);
+        }
+
+        .server-info h5 {
+            color: var(--text-white);
+            font-size: 1.15rem;
+            letter-spacing: 0.3px;
+        }
+
+        .server-info small {
+            color: var(--text-muted) !important;
+            font-size: 0.85rem;
+            font-weight: 600;
+        }
+
+        /* زر إدارة السيرفر المضاء (Glow Button) */
+        .btn-manage {
+            background: var(--accent-gradient) !important;
+            color: #ffffff !important;
+            border: none !important;
+            border-radius: 14px !important;
+            font-weight: 800 !important;
+            text-decoration: none;
+            padding: 12px 26px !important;
+            font-size: 0.95rem;
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+            transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1) !important;
+            box-shadow: 0 6px 20px var(--accent-glow);
+            position: relative;
+            overflow: hidden;
+        }
+
+        .btn-manage::before {
+            content: '';
+            position: absolute;
+            top: -50%;
+            left: -50%;
+            width: 200%;
+            height: 200%;
+            background: linear-gradient(45deg, transparent, rgba(255,255,255,0.25), transparent);
+            transform: rotate(45deg);
+            transition: all 0.5s ease;
+        }
+
+        .btn-manage:hover::before {
+            left: 100%;
+        }
+
+        .btn-manage:hover {
+            transform: scale(1.04);
+            box-shadow: 0 10px 30px rgba(168, 85, 247, 0.6);
+            color: #ffffff !important;
+        }
+
+        /* تنسيق زر تغيير اللغة العلوي */
+        .language-selector-wrapper {
+            position: absolute;
+            top: 20px;
+            {% if current_lang == 'en' %}right{% else %}left{% endif %}: 20px;
+            z-index: 10;
+        }
+
+        .lang-select {
+            background: var(--bg-card);
+            color: var(--text-white);
+            border: 1px solid var(--border-glass);
+            padding: 6px 14px;
+            border-radius: 10px;
+            font-size: 0.85rem;
+            font-weight: 600;
+            outline: none;
+            cursor: pointer;
+            backdrop-filter: blur(10px);
+            transition: all 0.3s ease;
+        }
+
+        .lang-select:hover, .lang-select:focus {
+            border-color: var(--border-hover);
+            box-shadow: 0 0 10px var(--accent-glow);
+        }
+
+        .lang-select option {
+            background-color: #12141d;
+            color: #ffffff;
+        }
+
+        @media (max-width: 576px) {
+            .server-card {
+                flex-direction: column;
+                gap: 16px;
+                text-align: center;
+            }
+            .server-info {
+                flex-direction: column;
+            }
+            .btn-manage {
+                width: 100%;
+                justify-content: center;
+            }
+            .language-selector-wrapper {
+                position: relative;
+                top: 0;
+                left: 0;
+                margin-bottom: 15px;
+                text-align: center;
+            }
+        }
+    </style>
+</head>
+<body>
+
+    <!-- عناصر الإضاءة الخلفية الحية -->
+    <div class="ambient-bg">
+        <div class="orb orb-1"></div>
+        <div class="orb orb-2"></div>
+    </div>
+
+<div class="container py-5">
+    <!-- قائمة تغيير اللغة المضافة -->
+    <div class="language-selector-wrapper">
+        <select id="langSelect" class="lang-select" onchange="changeLanguage(this.value)">
+            <option value="ar" {% if current_lang == 'ar' %}selected{% endif %}>العربية 🇩🇿</option>
+            <option value="en" {% if current_lang == 'en' %}selected{% endif %}>English 🇬🇧</option>
+        </select>
+    </div>
+
+    <div class="hero-section">
+        <h1 class="fw-bold mb-3">{% if current_lang == 'en' %}Your Available Servers{% else %}سيرفراتك المتاحة{% endif %}</h1>
+        <div class="verified-badge">
+            <i class="fa-solid fa-circle-check fs-5"></i> {% if current_lang == 'en' %}Bot is Verified on Discord{% else %}البوت موثق على الديسكورد{% endif %}
+        </div>
+    </div>
+
+    <div class="row justify-content-center">
+        <div class="col-md-9 col-lg-8">
+            {% for guild in guilds %}
+            <div class="server-card">
+                <div class="server-info">
+                    {% if guild.icon %}
+                        <img src="{{ guild.icon }}" class="server-icon" alt="icon">
+                    {% else %}
+                        <div class="server-icon"><i class="fa-solid fa-server"></i></div>
+                    {% endif %}
+                    <div>
+                        <h5 class="m-0 fw-bold">{{ guild.name }}</h5>
+                        <small class="text-muted">ID: {{ guild.id }}</small>
+                    </div>
+                </div>
+                <!-- تم تعديل الرابط أدناه لتمرير اللغة الحالية والمعرف معاً بشكل صحيح -->
+                <a href="/dashboard/{{ guild.id }}?{% if current_lang %}lang={{ current_lang }}&{% endif %}{% if user_id %}user_id={{ user_id }}{% elif request.args.get('user_id') %}user_id={{ request.args.get('user_id') }}{% endif %}" class="btn btn-manage">
+                    <i class="fa-solid fa-gear {% if current_lang == 'en' %}me-1{% else %}ms-1{% endif %}"></i> {% if current_lang == 'en' %}Server Settings{% else %}إعدادات السيرفر{% endif %}
+                </a>
+            </div>
+            {% endfor %}
+        </div>
+    </div>
+    <!-- قسم الإعلان والإرشادات الثابت -->
+    <div class="row justify-content-center mt-4">
+        <div class="col-md-9 col-lg-8">
+            <div style="background: var(--bg-card); border: 1px solid var(--border-glass); border-radius: 20px; padding: 25px; text-align: center; box-shadow: 0 10px 30px rgba(0,0,0,0.3);">
+            
+                <h3 style="color: var(--text-white); font-size: 1.3rem; margin-bottom: 10px; font-weight: 700;">
+                   {% if current_lang == 'en' %}💡 Quick Guide & Updates{% else %}💡 الشرح والإرشادات الهامة{% endif %}
+                </h3>
+
+                <p style="color: var(--text-muted); font-size: 0.95rem; margin-bottom: 18px;">
+                   {% if current_lang == 'en' %}
+                       Learn how to use hidden commands like network opening directly from your server!
+                   {% else %}
+                           تعرف على كيفية استخدام الأوامر المخفية مثل فتح وإغلاق الشبكة مباشرة في سيرفرك!
+                   {% endif %}
+                </p>
+
+                <div style="width: 100%; border-radius: 14px; overflow: hidden; border: 1px solid var(--border-glass);">
+                    <video src="https://i.imgur.com/4gsKN5m.mp4" autoplay muted loop playsinline crossorigin="anonymous" style="width: 100%; border-radius: 14px; display: block; border: 1px solid var(--border-glass);"></video>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+    function changeLanguage(lang) {
+        const urlParams = new URLSearchParams(window.location.search);
+        const userId = urlParams.get('user_id');
+
+        const formData = new URLSearchParams();
+        formData.append('language', lang);
+        formData.append('csrf_token', '{{ csrf_token }}');
+
+        fetch('/update_language', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/x-www-form-urlencoded',
+                'X-CSRFToken': '{{ csrf_token }}',
+            },
+            body: formData
+        })
+        .then(response => response.json())
+        .then(data => {
+            if(data.status === 'success') {
+                location.reload();
+            }
+        })
+        .catch(error => console.error('Error:', error));
+    }
+</script>
+
+</body>
+</html>
