@@ -1,5 +1,4 @@
 import static_ffmpeg
-add_paths = static_ffmpeg.add_paths
 
 import asyncio
 import time
