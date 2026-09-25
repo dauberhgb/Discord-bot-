@@ -1212,5 +1212,12 @@ async def on_ready():
   else:
       print("⚠️ مجلد cogs غير موجود أصلاً!")
 
+    
+  try:
+      synced = await bot.tree.sync()
+      print(f"✅ تم مزامنة {len(synced)} أمر سلاش (Slash Commands) بنجاح مع ديسكورد!")
+  except Exception as e:
+      print(f"❌ حدث خطأ أثناء مزامنة الأوامر: {e}")
+
 TOKEN = os.getenv("TOKEN")
 bot.run(TOKEN)
