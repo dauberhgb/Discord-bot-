@@ -1,10 +1,27 @@
 import os
 import json
+import copy
+import threading
+import time
 from pymongo import MongoClient
 
 # الاتصال بقاعدة بيانات MongoDB باستخدام متغير البيئة
 MONGO_URI = os.getenv("MONGO_URI")
-client = MongoClient(MONGO_URI)
+if not MONGO_URI:
+  raise RuntimeError("MONGO_URI must be configured before starting the bot.")
+
+# Bound connection waits and the connection pool.  This prevents a database
+# outage from stalling Discord's event loop indefinitely or spawning an
+# unbounded number of sockets under load.
+client = MongoClient(
+    MONGO_URI,
+    serverSelectionTimeoutMS=5000,
+    connectTimeoutMS=5000,
+    socketTimeoutMS=10000,
+    maxPoolSize=50,
+    minPoolSize=1,
+    retryWrites=True,
+)
 db = client.get_database("bot_database")
 
 # المجموعات (Collections)
@@ -13,6 +30,11 @@ levels_collection = db["user_levels"]
 
 networks_collection = db["networks"]
 network_guilds_collection = db["network_guilds"]
+
+_settings_cache = {}
+_settings_cache_lock = threading.Lock()
+_SETTINGS_CACHE_TTL = 30
+_SETTINGS_CACHE_MAX_SIZE = 2000
 
 def init_db():
   try:
@@ -26,6 +48,7 @@ def init_db():
     networks_collection.create_index("network_id", unique=True)
     network_guilds_collection.create_index([("guild_id", 1), ("network_id", 1)])
     network_guilds_collection.create_index("network_id")
+    shifts_collection.create_index([("guild_id", 1), ("total_seconds", -1)])
     
     print("✅ تم الاتصال بقاعدة بيانات MongoDB وإنشاء الـ Indexes بنجاح!")
   except Exception as e:
@@ -34,15 +57,22 @@ def init_db():
 
 def get_settings(guild_id):
   guild_id_str = str(guild_id)
+  now = time.monotonic()
+  with _settings_cache_lock:
+    cached = _settings_cache.get(guild_id_str)
+    if cached and now - cached[0] < _SETTINGS_CACHE_TTL:
+      return copy.deepcopy(cached[1])
   row = settings_collection.find_one({"guild_id": guild_id_str})
 
   if row:
     row.pop("_id", None)
-    return {
+    settings = {
         "guild_id": row.get("guild_id", guild_id_str),
+        "media_enabled": row.get("media_enabled") if row.get("media_enabled") is not None else True,
         "media_channels": row.get("media_channels", []),
         "media_warning": row.get("media_warning") or "عذراً {user}، هذه القناة مخصصة للميديا فقط!",
         "banned_words": row.get("banned_words", []),
+        "banned_enabled": row.get("banned_enabled") if row.get("banned_enabled") is not None else True,
         "max_violations": row.get("max_violations") or 3,
         "punishment_type": row.get("punishment_type") or "timeout",
         "timeout_minutes": row.get("timeout_minutes") or 10,
@@ -50,6 +80,7 @@ def get_settings(guild_id):
         "warning_msg_1": row.get("warning_msg_1") or "تنبيه أول يا {user}، يرجى الالتزام بالقوانين.",
         "warning_msg_2": row.get("warning_msg_2") or "تنبيه ثاني يا {user}، المخالفة القادمة ستعرضك للعقوبة!",
         "farewell_channel": row.get("farewell_channel") or "",
+        "farewell_enabled": row.get("farewell_enabled") if row.get("farewell_enabled") is not None else True,
         "farewell_title": row.get("farewell_title") or "وداعاً!",
         "farewell_desc": row.get("farewell_desc") or "غادر العضو {user} السيرفر.",
         "farewell_img": row.get("farewell_img") or "",
@@ -79,12 +110,16 @@ def get_settings(guild_id):
         "color_2": row.get("color_2") or "#FFD700",
         "color_3": row.get("color_3") or "#FFFFFF",
     }
+    _cache_settings(guild_id_str, settings)
+    return copy.deepcopy(settings)
     
-  return {
+  settings = {
       "guild_id": str(guild_id),
+      "media_enabled": True,
       "media_channels": [],
       "media_warning": "عذراً {user}، هذه القناة مخصصة للميديا فقط!",
       "banned_words": [],
+      "banned_enabled": True,
       "max_violations": 3,
       "punishment_type": "timeout",
       "timeout_minutes": 10,
@@ -92,6 +127,7 @@ def get_settings(guild_id):
       "warning_msg_1": "تنبيه أول يا {user}، يرجى الالتزام بالقوانين.",
       "warning_msg_2": "تنبيه ثاني يا {user}، المخالفة القادمة ستعرضك للعقوبة!",
       "farewell_channel": "",
+      "farewell_enabled": True,
       "farewell_title": "وداعاً!",
       "farewell_desc": "غادر العضو {user} السيرفر نتمنى له التوفيق.",
       "farewell_img": "",
@@ -115,15 +151,27 @@ def get_settings(guild_id):
       "welcome_img": "",
       "welcome_frame": "",
   }
+  _cache_settings(guild_id_str, settings)
+  return copy.deepcopy(settings)
+
+
+def _cache_settings(guild_id, settings):
+  with _settings_cache_lock:
+    if len(_settings_cache) >= _SETTINGS_CACHE_MAX_SIZE:
+      oldest_key = min(_settings_cache, key=lambda key: _settings_cache[key][0])
+      _settings_cache.pop(oldest_key, None)
+    _settings_cache[guild_id] = (time.monotonic(), copy.deepcopy(settings))
 
 
 def save_settings(guild_id, settings):
   guild_id_str = str(guild_id)
   data_to_save = {
       "guild_id": guild_id_str,
+      "media_enabled": bool(settings.get("media_enabled", True)),
       "media_channels": settings.get("media_channels", []),
       "media_warning": settings.get("media_warning", ""),
       "banned_words": settings.get("banned_words", []),
+      "banned_enabled": bool(settings.get("banned_enabled", True)),
       "max_violations": settings.get("max_violations", 3),
       "punishment_type": settings.get("punishment_type", "timeout"),
       "timeout_minutes": settings.get("timeout_minutes", 10),
@@ -131,6 +179,7 @@ def save_settings(guild_id, settings):
       "warning_msg_1": settings.get("warning_msg_1", ""),
       "warning_msg_2": settings.get("warning_msg_2", ""),
       "farewell_channel": settings.get("farewell_channel", ""),
+      "farewell_enabled": bool(settings.get("farewell_enabled", True)),
       "farewell_title": settings.get("farewell_title", ""),
       "farewell_desc": settings.get("farewell_desc", ""),
       "farewell_img": settings.get("farewell_img", ""),
@@ -166,6 +215,7 @@ def save_settings(guild_id, settings):
       {"$set": data_to_save},
       upsert=True
   )
+  _cache_settings(guild_id_str, data_to_save)
 
 
 # دوال إدارة نظام المستويات والخبرة (XP)
@@ -173,13 +223,10 @@ def add_user_xp(guild_id, user_id, xp_amount=15):
   g_id, u_id = str(guild_id), str(user_id)
   row = levels_collection.find_one({"guild_id": g_id, "user_id": u_id})
 
-  if row:
-    xp = row.get("xp", 0)
-    level = row.get("level", 1)
-  else:
-    xp, level = 0, 1
+  xp = row.get("xp", 0) if row else 0
+  level = row.get("level", 1) if row else 1
 
-  xp += xp_amount
+  xp += max(0, int(xp_amount))
   next_level_xp = level * 100 + 100
   leveled_up = False
 

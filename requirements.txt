@@ -1,13 +1,20 @@
-discord.py[voice]
+# PyNaCl below provides voice support without discord.py's optional Rust-only extra.
+discord.py
 Flask
 Pillow
 aiohttp-socks
 aiohttp
 requests
 arabic-reshaper
-python-bidi
+# 0.6+ uses a Rust/maturin build that does not support Termux Android targets.
+python-bidi==0.4.2
 pymongo[srv]
-static-ffmpeg
+# v3 pulls Twine publishing dependencies that require Rust on Termux.
+static-ffmpeg==2.0.15
 PyNaCl==1.5.0
 yt-dlp>=2026.0.0
 urllib3
+# Newer releases require the Rust-based jiter package, unavailable on Termux.
+openai==1.10.0
+# Keep OpenAI's compatible pure-Python Pydantic v1 dependency on Termux.
+pydantic<2

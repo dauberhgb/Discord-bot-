@@ -1,12 +1,16 @@
 import static_ffmpeg
 static_ffmpeg.add_paths()
 
+import asyncio
 import time
+import hmac
 from datetime import timedelta
 from functools import wraps
 import json
 import os
+import secrets
 import threading
+from urllib.parse import urlparse
 import database
 from discord import app_commands
 from discord.ext import commands
@@ -26,6 +30,16 @@ from bidi.algorithm import get_display
 # استيراد نظام الترجمات ودالة الترجمة
 from translations import _
 
+
+from openai import OpenAI
+
+def get_omni_client():
+    return OpenAI(
+        base_url=os.getenv("OMNIROUTE_BASE_URL"),
+        api_key=os.getenv("OMNIROUTE_API_KEY")
+    )
+
+
 # ==========================================
 # 1. إعداد وتشغيل بوت ديسكورد
 # ==========================================
@@ -36,6 +50,8 @@ intents.voice_states = True
 
 bot = commands.Bot(command_prefix="!", intents=intents)
 violations = {}
+xp_cooldowns = {}
+XP_COOLDOWN_SECONDS = 60
 
 # معرف حسابك في ديسكورد (User ID)
 OWNER_ID = 1462429084377157832
@@ -44,7 +60,26 @@ OWNER_ID = 1462429084377157832
 # 2. إعداد خادم الويب (Flask Dashboard مع Discord OAuth2)
 # ==========================================
 app = Flask(__name__)
-app.secret_key = os.getenv("FLASK_SECRET_KEY", "A_VERY_SECRET_KEY_FOR_SESSIONS_12345")
+app.secret_key = os.getenv("FLASK_SECRET_KEY")
+if not app.secret_key:
+  raise RuntimeError("FLASK_SECRET_KEY must be configured before starting the dashboard.")
+@app.context_processor
+def csrf_context():
+  token = session.get("csrf_token")
+  if not token:
+    token = secrets.token_urlsafe(32)
+    session["csrf_token"] = token
+  return {"csrf_token": token}
+
+
+@app.before_request
+def verify_csrf():
+  if request.method != "POST":
+    return None
+  expected = session.get("csrf_token", "")
+  provided = request.headers.get("X-CSRFToken") or request.form.get("csrf_token", "")
+  if not expected or not provided or not hmac.compare_digest(expected, provided):
+    return jsonify({"status": "error", "message": "Invalid CSRF token."}), 403
 
 # إعدادات ديسكورد OAuth2 (تأكد من إضافتها في متغيرات البيئة Environment Variables)
 CLIENT_ID = os.getenv("CLIENT_ID", "")
@@ -58,6 +93,13 @@ def get_base_url():
   if not base_url:
     return f"https://{os.getenv('RENDER_SERVICE_NAME', 'app')}.onrender.com"
   return base_url
+
+
+app.config.update(
+    SESSION_COOKIE_HTTPONLY=True,
+    SESSION_COOKIE_SAMESITE="Lax",
+    SESSION_COOKIE_SECURE=get_base_url().startswith("https://"),
+)
 
 
 def admin_required(f):
@@ -78,15 +120,6 @@ def admin_required(f):
     # 1. التحقق عبر الـ Session (لوحة الويب)
     admin_guilds = session.get("admin_guilds", [])
     user_id = session.get("user_id")
-
-    # 2. التحقق عبر الـ Request parameters (إن وجدت)
-    req_user_id = (
-        request.args.get("user_id")
-        or request.headers.get("X-User-ID")
-        or request.form.get("user_id")
-    )
-    if req_user_id and req_user_id.isdigit():
-      user_id = req_user_id
 
     is_authorized = False
     if user_id:
@@ -123,12 +156,16 @@ def admin_required(f):
 
 @app.route("/login")
 def login():
+  if not CLIENT_ID:
+    return "Discord OAuth is not configured.", 503
   base_url = get_base_url()
   redirect_uri = REDIRECT_URI or f"{base_url}/auth/callback"
+  state = secrets.token_urlsafe(32)
+  session["oauth_state"] = state
   discord_login_url = (
       f"https://discord.com/api/oauth2/authorize?client_id={CLIENT_ID}"
       f"&redirect_uri={requests.utils.quote(redirect_uri, safe='')}"
-      "&response_type=code&scope=identify+guilds"
+      f"&response_type=code&scope=identify+guilds&state={state}"
   )
   return redirect(discord_login_url)
 
@@ -136,7 +173,8 @@ def login():
 @app.route("/auth/callback")
 def auth_callback():
   code = request.args.get("code")
-  if not code:
+  state = request.args.get("state")
+  if not code or not state or not secrets.compare_digest(state, session.pop("oauth_state", "")):
     return "فشل تسجيل الدخول: لم يتم استلام رمز المصادقة.", 400
 
   base_url = get_base_url()
@@ -152,9 +190,8 @@ def auth_callback():
   headers = {"Content-Type": "application/x-www-form-urlencoded"}
 
   try:
-    r = requests.post(
-        "https://discord.com/api/oauth2/token", data=token_data, headers=headers
-    )
+    r = requests.post("https://discord.com/api/oauth2/token", data=token_data, headers=headers, timeout=10)
+    r.raise_for_status()
     res_json = r.json()
     access_token = res_json.get("access_token")
     if not access_token:
@@ -163,16 +200,14 @@ def auth_callback():
     user_headers = {"Authorization": f"Bearer {access_token}"}
     
     # جلب معلومات المستخدم
-    user_res = requests.get(
-        "https://discord.com/api/users/@me", headers=user_headers
-    )
+    user_res = requests.get("https://discord.com/api/users/@me", headers=user_headers, timeout=10)
+    user_res.raise_for_status()
     user_data = user_res.json()
     session["user_id"] = str(user_data.get("id"))
 
     # جلب سيرفرات المستخدم
-    guilds_res = requests.get(
-        "https://discord.com/api/users/@me/guilds", headers=user_headers
-    )
+    guilds_res = requests.get("https://discord.com/api/users/@me/guilds", headers=user_headers, timeout=10)
+    guilds_res.raise_for_status()
     guilds = guilds_res.json()
 
     admin_guilds = []
@@ -184,8 +219,10 @@ def auth_callback():
 
     session["admin_guilds"] = admin_guilds
     return redirect(url_for("guild_list"))
-  except Exception as e:
-    return f"حدث خطأ أثناء المصادقة: {e}", 500
+  except requests.RequestException:
+    return "تعذر الاتصال بخدمة تسجيل الدخول. حاول لاحقاً.", 502
+  except (ValueError, TypeError):
+    return "فشل التحقق من استجابة تسجيل الدخول.", 502
 
 # دالة مساعدة لجلب لغة السيرفر
 def get_guild_lang(guild_id):
@@ -278,16 +315,19 @@ def dashboard(guild_id):
 
 @app.route("/update_language", methods=["POST"])
 def update_language():
-  user_id = request.form.get("user_id")
   new_lang = request.form.get("language")
 
-  if not user_id or not user_id.isdigit() or not new_lang:
+  if new_lang not in {"ar", "en"}:
     return jsonify({"status": "error", "message": "بيانات غير صالحة!"}), 400
 
+  user_id = session.get("user_id")
+  if not user_id:
+    return jsonify({"status": "error", "message": "يجب تسجيل الدخول أولاً."}), 401
+
+  admin_guilds = set(session.get("admin_guilds", []))
   for guild in bot.guilds:
     try:
-      member = guild.get_member(int(user_id))
-      if member and member.guild_permissions.manage_guild:
+      if str(guild.id) in admin_guilds or int(user_id) in {OWNER_ID, guild.owner_id}:
         settings = database.get_settings(guild.id)
         settings["language"] = new_lang
         database.save_settings(guild.id, settings)
@@ -323,31 +363,51 @@ def save(guild_id):
     if w and r:
       auto_responses[w] = r
 
+  def bounded_int(field, default, minimum, maximum):
+    try:
+      return max(minimum, min(maximum, int(request.form.get(field, default))))
+    except (TypeError, ValueError):
+      return default
+
+  def safe_url(value):
+    value = str(value or "").strip()
+    return value if urlparse(value).scheme in {"http", "https"} else ""
+
+  language = request.form.get("language", "ar")
+  if language not in {"ar", "en"}:
+    language = "ar"
+  punishment_type = request.form.get("punishment_type", "timeout")
+  if punishment_type not in {"timeout", "kick", "mute"}:
+    punishment_type = "timeout"
+  farewell_action = request.form.get("farewell_action", "none")
+  if farewell_action not in {"none", "ban", "timeout"}:
+    farewell_action = "none"
+
   settings = {
       "guild_id": guild_id,
-      "language": request.form.get("language", "ar"),
+      "language": language,
       "media_enabled": media_enabled,
       "media_channels": media_channels,
       "media_warning": request.form.get("media_warning", ""),
       "banned_enabled": banned_enabled,
       "banned_words": banned_words,
-      "max_violations": int(request.form.get("max_violations", 3)),
-      "punishment_type": request.form.get("punishment_type", "timeout"),
-      "timeout_minutes": int(request.form.get("timeout_minutes", 10)),
+      "max_violations": bounded_int("max_violations", 3, 1, 20),
+      "punishment_type": punishment_type,
+      "timeout_minutes": bounded_int("timeout_minutes", 10, 1, 40320),
       "warning_title": request.form.get("warning_title", ""),
       "warning_msg_1": request.form.get("warning_msg_1", ""),
       "warning_msg_2": request.form.get("warning_msg_2", ""),
       "welcome_enabled": welcome_enabled,
       "welcome_channel": request.form.get("welcome_channel", ""),
       "welcome_msg": request.form.get("welcome_msg", ""),
-      "welcome_img": request.form.get("welcome_img", ""),
+      "welcome_img": safe_url(request.form.get("welcome_img", "")),
       "welcome_frame": request.form.get("welcome_frame", ""),
       "farewell_enabled": farewell_enabled,
       "farewell_channel": request.form.get("farewell_channel", ""),
       "farewell_title": request.form.get("farewell_title", ""),
       "farewell_desc": request.form.get("farewell_desc", ""),
-      "farewell_img": request.form.get("farewell_img", ""),
-      "farewell_action": request.form.get("farewell_action", "none"),
+      "farewell_img": safe_url(request.form.get("farewell_img", "")),
+      "farewell_action": farewell_action,
       "auto_responses": auto_responses,
       "auto_role": request.form.get("auto_role", ""),
       "auto_nickname": request.form.get("auto_nickname", ""),
@@ -355,8 +415,8 @@ def save(guild_id):
       "ticket_category": request.form.get("ticket_category", ""),
       "ticket_support_role": request.form.get("ticket_support_role", ""),
       "ticket_archive_channel": request.form.get("ticket_archive_channel", ""),
-      "xp_enabled": int(request.form.get("xp_enabled", 1)),
-      "xp_per_message": int(request.form.get("xp_per_message", 15)),
+      "xp_enabled": bounded_int("xp_enabled", 1, 0, 1),
+      "xp_per_message": bounded_int("xp_per_message", 15, 1, 100),
       "xp_role_5": request.form.get("xp_role_5", ""),
       "xp_role_10": request.form.get("xp_role_10", ""),
       "xp_role_20": request.form.get("xp_role_20", ""),
@@ -534,6 +594,10 @@ async def on_member_remove(member):
             label=f"Apply {action.upper()}" if lang == "en" else f"تطبيق {action.upper()}", style=discord.ButtonStyle.danger
         )
         async def btn_callback(self, interaction, button):
+          if not interaction.user.guild_permissions.moderate_members:
+            msg = "You need Moderate Members permission." if lang == "en" else "تحتاج إلى صلاحية إدارة الأعضاء."
+            await interaction.response.send_message(msg, ephemeral=True)
+            return
           if action == "ban":
             await member.ban(reason="Farewell button action" if lang == "en" else "عن طريق زر الوداع")
             msg = "Member banned." if lang == "en" else "تم حظر العضو."
@@ -565,11 +629,17 @@ async def on_message(message):
 
   lang = settings.get("language", "ar")
 
-  if settings.get("xp_enabled", 1) == 1:
+  xp_key = (message.guild.id, message.author.id)
+  now = time.monotonic()
+  if len(xp_cooldowns) > 10000:
+    xp_cooldowns.clear()
+  last_xp = xp_cooldowns.get(xp_key, 0)
+  if settings.get("xp_enabled", 1) == 1 and now - last_xp >= XP_COOLDOWN_SECONDS:
+    xp_cooldowns[xp_key] = now
     xp_gain = settings.get("xp_per_message", 15)
     if hasattr(database, "add_user_xp"):
-      new_level, leveled_up = database.add_user_xp(
-          message.guild.id, message.author.id, xp_gain
+      new_level, leveled_up = await asyncio.to_thread(
+          database.add_user_xp, message.guild.id, message.author.id, xp_gain
       )
       if leveled_up:
         try:
@@ -668,11 +738,6 @@ async def on_message(message):
     if msg_content in auto_resp:
         await message.channel.send(auto_resp[msg_content])
         return
-
-    # إرسال الرسالة لنظام الشبكات في cogs وتفعيل الأوامر
-    network_cog = bot.get_cog("NetworkCog")
-    if network_cog:
-        await network_cog.on_message(message)
 
     await bot.process_commands(message)
 
